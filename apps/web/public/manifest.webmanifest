@@ -1,0 +1,18 @@
+{
+  "name": "EveryoneMessage",
+  "short_name": "EM",
+  "description": "Fast private messenger built around em IDs.",
+  "start_url": "/chats",
+  "display": "standalone",
+  "background_color": "#f7f8fb",
+  "theme_color": "#f7f8fb",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

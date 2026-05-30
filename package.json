@@ -1,0 +1,25 @@
+{
+  "name": "everyonemessage",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run build -w @em/shared && concurrently \"npm run dev -w @em/api\" \"npm run dev -w @em/web\"",
+    "dev:api": "npm run dev -w @em/api",
+    "dev:web": "npm run dev -w @em/web",
+    "build": "npm run build -w @em/shared && npm run build -w @em/api && npm run build -w @em/web",
+    "test": "npm run test -w @em/shared && npm run test -w @em/api && npm run test -w @em/web",
+    "typecheck": "npm run typecheck -w @em/shared && npm run typecheck -w @em/api && npm run typecheck -w @em/web"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "typescript": "^5.4.5"
+  },
+  "engines": {
+    "node": ">=18.18"
+  }
+}
