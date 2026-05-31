@@ -1,9 +1,10 @@
 import { z } from "zod";
 
 export const EM_HANDLE_MIN_LENGTH = 3;
-export const EM_HANDLE_MAX_LENGTH = 24;
-export const EM_HANDLE_PATTERN = /^[a-z0-9._-]{3,24}$/;
-export const DISPLAY_EM_HANDLE_PATTERN = /^#[a-z0-9._-]{3,24}$/;
+export const EM_HANDLE_MAX_LENGTH = 12;
+export const EM_HANDLE_PATTERN = /^[a-z0-9_-]{3,12}$/;
+export const EM_HANDLE_SEARCH_PATTERN = /^[a-z0-9_-]{1,12}$/;
+export const DISPLAY_EM_HANDLE_PATTERN = /^#[a-z0-9_-]{3,12}$/;
 
 export function normalizeEmHandle(input: string): string {
   return input.trim().replace(/^#/, "").toLowerCase();
@@ -26,8 +27,33 @@ export const emHandleSchema = z
       .string()
       .min(EM_HANDLE_MIN_LENGTH)
       .max(EM_HANDLE_MAX_LENGTH)
-      .regex(EM_HANDLE_PATTERN, "em아이디는 a-z, 0-9, _, -, . 만 사용할 수 있습니다.")
+      .regex(EM_HANDLE_PATTERN, "em아이디는 # 뒤에 a-z, 0-9, _, - 만 3-12자 사용할 수 있습니다.")
   );
+
+export const emHandleSearchSchema = z
+  .string()
+  .trim()
+  .transform(normalizeEmHandle)
+  .pipe(
+    z
+      .string()
+      .min(1)
+      .max(EM_HANDLE_MAX_LENGTH)
+      .regex(EM_HANDLE_SEARCH_PATTERN, "검색어는 a-z, 0-9, _, - 만 입력할 수 있습니다.")
+  );
+
+export const publicFileUrlSchema = z.string().refine(
+  (value) => {
+    if (value.startsWith("/files/")) return true;
+    try {
+      const url = new URL(value);
+      return url.protocol === "http:" || url.protocol === "https:";
+    } catch {
+      return false;
+    }
+  },
+  { message: "파일 URL이 올바르지 않습니다." }
+);
 
 export const firebaseUidSchema = z.string().min(1).max(128);
 export const emailSchema = z.string().trim().email().max(320);
@@ -65,7 +91,7 @@ export const attachmentSchema = z.object({
   name: z.string().min(1).max(255),
   mimeType: z.string().min(1).max(120),
   size: z.number().int().nonnegative(),
-  url: z.string().url()
+  url: publicFileUrlSchema
 });
 export type Attachment = z.infer<typeof attachmentSchema>;
 
@@ -76,7 +102,7 @@ export const onboardingSchema = z.object({
 
 export const updateProfileSchema = z.object({
   name: nameSchema.optional(),
-  avatarUrl: z.string().url().nullable().optional(),
+  avatarUrl: publicFileUrlSchema.nullable().optional(),
   bio: profileBioSchema
 });
 

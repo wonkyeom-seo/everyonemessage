@@ -9,9 +9,11 @@ describe("em handle helpers", () => {
 
   it("validates allowed characters", () => {
     expect(isValidEmHandle("#testemid")).toBe(true);
-    expect(isValidEmHandle("#test_em-id.01")).toBe(true);
+    expect(isValidEmHandle("#test_em-id")).toBe(true);
+    expect(isValidEmHandle("#test.emid")).toBe(false);
     expect(isValidEmHandle("#테스트")).toBe(false);
     expect(isValidEmHandle("#ab")).toBe(false);
+    expect(isValidEmHandle("#abcdefghijkl3")).toBe(false);
   });
 });
 

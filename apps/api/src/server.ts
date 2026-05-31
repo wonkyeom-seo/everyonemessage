@@ -11,6 +11,7 @@ import {
   createStatusSchema,
   displayEmHandle,
   emHandleSchema,
+  emHandleSearchSchema,
   extractHttpUrls,
   normalizeEmHandle,
   onboardingSchema,
@@ -182,11 +183,9 @@ export function createApi(config: AppConfig, db: Db, storage: StorageService, ru
   app.get("/api/users/search", async (request) => {
     const { user } = await requireProfile(request, db, config);
     const raw = (request.query as { emId?: string }).emId ?? "";
-    const emHandle = emHandleSchema.parse(raw);
-    const current = await findSearchResult(db, user.id, emHandle);
-    if (current) {
-      return { result: current };
-    }
+    const emHandle = emHandleSearchSchema.parse(raw);
+    const results = await findSearchResults(db, user.id, emHandle);
+    const exact = results.find((item) => normalizeEmHandle(item.emHandle) === emHandle);
     const history = await queryOne<{
       user_id: string;
       previous_handle: string;
@@ -200,24 +199,29 @@ export function createApi(config: AppConfig, db: Db, storage: StorageService, ru
               h.protected_until::text
        FROM em_handle_history h
        JOIN users u ON u.id = h.user_id
-       WHERE h.handle = $1 AND h.protected_until > now()`,
+      WHERE h.handle = $1 AND h.protected_until > now()`,
       [emHandle]
     );
     if (!history) {
-      return { result: null };
+      return { result: exact ?? results[0] ?? null, results };
     }
     const result = await findSearchResult(db, user.id, history.current_handle);
-    return {
-      result: result
-        ? {
-            ...result,
-            previousHandleNotice: {
-              previousHandle: displayEmHandle(history.previous_handle),
-              currentHandle: displayEmHandle(history.current_handle),
-              protectedUntil: history.protected_until
-            }
+    const resultWithNotice = result
+      ? {
+          ...result,
+          previousHandleNotice: {
+            previousHandle: displayEmHandle(history.previous_handle),
+            currentHandle: displayEmHandle(history.current_handle),
+            protectedUntil: history.protected_until
           }
-        : null
+        }
+      : null;
+    const mergedResults = resultWithNotice
+      ? [resultWithNotice, ...results.filter((item) => item.id !== resultWithNotice.id)]
+      : results;
+    return {
+      result: resultWithNotice ?? exact ?? results[0] ?? null,
+      results: mergedResults
     };
   });
 
@@ -435,8 +439,8 @@ export function createApi(config: AppConfig, db: Db, storage: StorageService, ru
       conversations: conversations.map((conversation: any) => ({
         id: conversation.id,
         kind: conversation.kind,
-        title: conversation.kind === "direct" ? conversation.directPeerName : conversation.title,
-        avatarUrl: conversation.kind === "direct" ? conversation.directPeerAvatarUrl : conversation.avatarUrl,
+        title: conversation.kind === "direct" ? conversation.directPeerName ?? conversation.title ?? "나와의 채팅" : conversation.title,
+        avatarUrl: conversation.kind === "direct" ? conversation.directPeerAvatarUrl ?? conversation.avatarUrl : conversation.avatarUrl,
         lastMessageText: conversation.lastMessageText,
         lastMessageAt: conversation.lastMessageAt,
         unreadCount: Number(conversation.unreadCount),
@@ -477,6 +481,48 @@ export function createApi(config: AppConfig, db: Db, storage: StorageService, ru
         `INSERT INTO conversation_members (conversation_id, user_id, role)
          VALUES ($1, $2, 'owner'), ($1, $3, 'member')`,
         [conversationId, user.id, input.friendUserId]
+      );
+      await client.query("COMMIT");
+      return { conversationId };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  });
+
+  app.post("/api/conversations/self", async (request) => {
+    const { user } = await requireProfile(request, db, config);
+    const existing = await queryOne<{ id: string }>(
+      db,
+      `SELECT c.id
+       FROM conversations c
+       JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $1 AND cm.left_at IS NULL
+       WHERE c.kind = 'direct'
+         AND c.created_by = $1
+         AND c.title = '나와의 채팅'
+         AND NOT EXISTS (
+           SELECT 1 FROM conversation_members other
+           WHERE other.conversation_id = c.id AND other.user_id <> $1 AND other.left_at IS NULL
+         )
+       LIMIT 1`,
+      [user.id]
+    );
+    if (existing) {
+      return { conversationId: existing.id };
+    }
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+      const conversation = await client.query<{ id: string }>(
+        "INSERT INTO conversations (kind, title, created_by) VALUES ('direct', '나와의 채팅', $1) RETURNING id",
+        [user.id]
+      );
+      const conversationId = conversation.rows[0].id;
+      await client.query(
+        "INSERT INTO conversation_members (conversation_id, user_id, role) VALUES ($1, $2, 'owner')",
+        [conversationId, user.id]
       );
       await client.query("COMMIT");
       return { conversationId };
@@ -853,7 +899,7 @@ async function findSearchResult(db: Db, viewerId: string, emHandle: string) {
      LEFT JOIN LATERAL (
        SELECT text, visibility FROM statuses
        WHERE user_id = u.id AND expires_at > now()
-         AND (visibility = 'public' OR EXISTS (
+         AND (u.id = $1 OR visibility = 'public' OR EXISTS (
            SELECT 1 FROM friendships f
            WHERE (f.user_a_id = $1 AND f.user_b_id = u.id) OR (f.user_b_id = $1 AND f.user_a_id = u.id)
          ))
@@ -872,6 +918,49 @@ async function findSearchResult(db: Db, viewerId: string, emHandle: string) {
     return null;
   }
   return { ...row, emHandle: displayEmHandle(row.emHandle) };
+}
+
+async function findSearchResults(db: Db, viewerId: string, emHandleQuery: string) {
+  const rows = await queryMany<any>(
+    db,
+    `SELECT u.id, u.name, u.em_handle AS "emHandle", u.avatar_url AS "avatarUrl",
+            CASE
+              WHEN u.id = $1 THEN 'self'
+              WHEN EXISTS (SELECT 1 FROM friendships f WHERE (f.user_a_id = $1 AND f.user_b_id = u.id) OR (f.user_b_id = $1 AND f.user_a_id = u.id)) THEN 'friend'
+              WHEN EXISTS (SELECT 1 FROM friend_requests fr WHERE fr.requester_id = $1 AND fr.addressee_id = u.id AND fr.state = 'pending') THEN 'request_sent'
+              WHEN EXISTS (SELECT 1 FROM friend_requests fr WHERE fr.requester_id = u.id AND fr.addressee_id = $1 AND fr.state = 'pending') THEN 'request_received'
+              ELSE 'none'
+            END AS relation,
+            s.text AS "statusText",
+            s.visibility AS "statusVisibility"
+     FROM users u
+     LEFT JOIN LATERAL (
+       SELECT text, visibility FROM statuses
+       WHERE user_id = u.id AND expires_at > now()
+         AND (u.id = $1 OR visibility = 'public' OR EXISTS (
+           SELECT 1 FROM friendships f
+           WHERE (f.user_a_id = $1 AND f.user_b_id = u.id) OR (f.user_b_id = $1 AND f.user_a_id = u.id)
+         ))
+       ORDER BY created_at DESC
+       LIMIT 1
+     ) s ON true
+     WHERE POSITION($2 IN u.em_handle) > 0
+       AND NOT EXISTS (
+         SELECT 1 FROM blocks b
+         WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
+            OR (b.blocker_id = u.id AND b.blocked_id = $1)
+       )
+     ORDER BY
+       CASE
+         WHEN u.em_handle = $2 THEN 0
+         WHEN LEFT(u.em_handle, char_length($2)) = $2 THEN 1
+         ELSE 2
+       END,
+       u.em_handle ASC
+     LIMIT 20`,
+    [viewerId, emHandleQuery]
+  );
+  return rows.map((row) => ({ ...row, emHandle: displayEmHandle(row.emHandle) }));
 }
 
 function orderedPair(a: string, b: string): [string, string] {

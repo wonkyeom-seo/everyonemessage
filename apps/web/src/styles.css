@@ -198,6 +198,51 @@ a {
   padding: 0 12px;
 }
 
+.handle-input {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.handle-input:focus-within {
+  border-color: var(--primary);
+}
+
+.handle-input span {
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  min-width: 38px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.handle-input input {
+  min-width: 0;
+  height: 42px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.handle-input input:focus {
+  border: 0;
+}
+
+.hint.compact {
+  margin: -4px 0 14px;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
 .field input:focus,
 .inline-form input:focus,
 .search-row input:focus,
@@ -344,6 +389,25 @@ a {
   color: var(--text);
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.text-icon-button {
+  display: inline-flex;
+  width: auto;
+  min-width: 38px;
+  padding: 0 10px;
+  gap: 6px;
+}
+
+.text-icon-button span {
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .back-button {
   display: none;
 }
@@ -362,7 +426,9 @@ a {
 }
 
 .search-row.strong {
-  background: var(--surface);
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .search-row input {
@@ -372,6 +438,11 @@ a {
   background: transparent;
 }
 
+.search-row .handle-input input {
+  height: 40px;
+  padding: 0 12px;
+}
+
 .search-row button {
   min-width: 52px;
   height: 32px;
@@ -379,6 +450,15 @@ a {
   background: var(--primary);
   color: #fff;
   font-weight: 700;
+}
+
+.search-handle {
+  flex: 1;
+}
+
+.search-results {
+  display: grid;
+  gap: 10px;
 }
 
 .list-stack {
@@ -724,6 +804,22 @@ em {
   text-align: center;
 }
 
+.compact-result {
+  gap: 9px;
+}
+
+.compact-result .avatar.large {
+  width: 64px;
+  height: 64px;
+  min-width: 64px;
+  border-radius: 14px;
+  font-size: 20px;
+}
+
+.compact-result .primary-button {
+  max-width: 240px;
+}
+
 .section-block {
   margin-bottom: 14px;
 }
@@ -762,6 +858,34 @@ em {
 .settings-section .primary-button {
   width: fit-content;
   min-width: 120px;
+}
+
+.pwa-button {
+  background: rgba(22, 99, 255, 0.1);
+  color: var(--primary-strong);
+}
+
+.install-fab {
+  position: fixed;
+  right: 16px;
+  bottom: calc(78px + env(safe-area-inset-bottom));
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: var(--primary);
+  color: #fff;
+  box-shadow: var(--shadow);
+  font-weight: 800;
+}
+
+.install-fab.muted-install {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
 }
 
 @media (orientation: portrait), (max-width: 719px) {
@@ -829,5 +953,9 @@ em {
   .settings-grid {
     grid-template-columns: minmax(240px, 320px) minmax(280px, 1fr);
     align-items: start;
+  }
+
+  .install-fab {
+    bottom: 18px;
   }
 }

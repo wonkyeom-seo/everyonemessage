@@ -1,11 +1,10 @@
 import {
   Bell,
   BellRing,
-  Check,
+  Camera,
   ChevronLeft,
-  Edit3,
+  Download,
   FileUp,
-  Hash,
   LogOut,
   MessageCircle,
   MoreHorizontal,
@@ -20,7 +19,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { io, type Socket } from "socket.io-client";
-import { displayEmHandle } from "@em/shared";
+import { displayEmHandle, normalizeEmHandle } from "@em/shared";
 import { ApiClient, ApiError } from "./api";
 import {
   auth,
@@ -48,6 +47,11 @@ interface SessionUser {
   mode: "firebase" | "dev";
 }
 
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+}
+
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || "/api";
 const socketPath = import.meta.env.VITE_SOCKET_PATH || "/socket.io";
 
@@ -57,6 +61,27 @@ export function App() {
   const [me, setMe] = useState<Me | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [socket, setSocket] = useState<Socket | null>(null);
+  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [appInstalled, setAppInstalled] = useState(
+    window.matchMedia("(display-mode: standalone)").matches || (navigator as Navigator & { standalone?: boolean }).standalone === true
+  );
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as BeforeInstallPromptEvent);
+    };
+    const handleInstalled = () => {
+      setInstallPrompt(null);
+      setAppInstalled(true);
+    };
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    window.addEventListener("appinstalled", handleInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+      window.removeEventListener("appinstalled", handleInstalled);
+    };
+  }, []);
 
   useEffect(() => {
     if (auth) {
@@ -150,13 +175,38 @@ export function App() {
     setSession(next);
   }, []);
 
+  const installPwa = useCallback(async () => {
+    if (!installPrompt) {
+      return false;
+    }
+    await installPrompt.prompt();
+    const choice = await installPrompt.userChoice;
+    if (choice.outcome === "accepted") {
+      setInstallPrompt(null);
+      setAppInstalled(true);
+      return true;
+    }
+    return false;
+  }, [installPrompt]);
+
   if (booting) return <Splash />;
   if (!session) return <AuthScreen onDevLogin={devLogin} />;
   if (!session.emailVerified) return <VerifyEmailScreen email={session.email} onLogout={logout} />;
   if (profileLoading) return <Splash />;
   if (!me?.onboarded) return <OnboardingScreen api={api} email={session.email} onDone={refreshMe} onLogout={logout} />;
 
-  return <AppShell api={api} me={me} socket={socket} onLogout={logout} onMeChange={setMe} />;
+  return (
+    <AppShell
+      api={api}
+      me={me}
+      socket={socket}
+      appInstalled={appInstalled}
+      canInstallPwa={Boolean(installPrompt)}
+      onInstallPwa={installPwa}
+      onLogout={logout}
+      onMeChange={setMe}
+    />
+  );
 }
 
 function Splash() {
@@ -279,7 +329,7 @@ function OnboardingScreen({
   const submit = async () => {
     setError("");
     try {
-      await api.post("/me/onboarding", { name, emHandle });
+      await api.post("/me/onboarding", { name, emHandle: displayEmHandle(emHandle) });
       await onDone();
     } catch (error) {
       setError(getErrorMessage(error));
@@ -302,9 +352,13 @@ function OnboardingScreen({
         </label>
         <label className="field">
           <span>em아이디</span>
-          <input placeholder="#testemid" value={emHandle} onChange={(event) => setEmHandle(event.target.value)} />
+          <div className="handle-input">
+            <span>#</span>
+            <input placeholder="em_id-123" maxLength={12} value={emHandle} onChange={(event) => setEmHandle(cleanHandleInput(event.target.value))} />
+          </div>
         </label>
-        <button className="primary-button" disabled={!name || !emHandle} onClick={submit}>
+        <p className="hint compact">3-12자, a-z / 0-9 / - / _ 만 사용할 수 있습니다.</p>
+        <button className="primary-button" disabled={!name || emHandle.length < 3} onClick={submit}>
           시작하기
         </button>
         {error && <p className="notice error">{error}</p>}
@@ -320,16 +374,23 @@ function AppShell({
   api,
   me,
   socket,
+  appInstalled,
+  canInstallPwa,
+  onInstallPwa,
   onLogout,
   onMeChange
 }: {
   api: ApiClient;
   me: Me;
   socket: Socket | null;
+  appInstalled: boolean;
+  canInstallPwa: boolean;
+  onInstallPwa: () => Promise<boolean>;
   onLogout: () => void;
   onMeChange: (me: Me) => void;
 }) {
   const location = useLocation();
+  const navigate = useNavigate();
   const isChatOpen = location.pathname.startsWith("/chats/");
 
   return (
@@ -349,10 +410,35 @@ function AppShell({
           <Route path="/friends" element={<FriendsScreen api={api} me={me} />} />
           <Route path="/discover" element={<DiscoverScreen api={api} me={me} />} />
           <Route path="/notifications" element={<NotificationsScreen api={api} />} />
-          <Route path="/me" element={<ProfileScreen api={api} me={me} onLogout={onLogout} onMeChange={onMeChange} />} />
+          <Route
+            path="/me"
+            element={
+              <ProfileScreen
+                api={api}
+                me={me}
+                appInstalled={appInstalled}
+                canInstallPwa={canInstallPwa}
+                onInstallPwa={onInstallPwa}
+                onLogout={onLogout}
+                onMeChange={onMeChange}
+              />
+            }
+          />
           <Route path="*" element={<Navigate to="/chats" replace />} />
         </Routes>
       </main>
+      {!appInstalled && (
+        <button
+          className={`install-fab ${canInstallPwa ? "" : "muted-install"}`}
+          onClick={async () => {
+            const accepted = await onInstallPwa();
+            if (!accepted && !canInstallPwa) navigate("/me");
+          }}
+        >
+          <Download size={18} />
+          <span>앱 설치</span>
+        </button>
+      )}
     </div>
   );
 }
@@ -397,10 +483,26 @@ function ChatScreen({ api, me, socket }: { api: ApiClient; me: Me; socket: Socke
     };
   }, [load, socket]);
 
+  const startSelfChat = async () => {
+    const response = await api.post<{ conversationId: string }>("/conversations/self");
+    navigate(`/chats/${response.conversationId}`);
+  };
+
   return (
     <section className="split-view">
       <aside className={`list-pane ${conversationId ? "mobile-hidden" : ""}`}>
-        <Header title="채팅" action={<LinkButton to="/friends" icon={<UserPlus size={18} />} label="새 채팅" />} />
+        <Header
+          title="채팅"
+          action={
+            <span className="header-actions">
+              <button className="icon-button text-icon-button" onClick={startSelfChat} title="나와의 채팅">
+                <MessageCircle size={17} />
+                <span>나</span>
+              </button>
+              <LinkButton to="/friends" icon={<UserPlus size={18} />} label="새 채팅" />
+            </span>
+          }
+        />
         <div className="search-row">
           <Search size={17} />
           <input placeholder="대화 검색" />
@@ -744,7 +846,7 @@ function FriendsScreen({ api, me }: { api: ApiClient; me: Me }) {
 
 function DiscoverScreen({ api, me }: { api: ApiClient; me: Me }) {
   const [query, setQuery] = useState("");
-  const [result, setResult] = useState<SearchResult | null>(null);
+  const [results, setResults] = useState<SearchResult[]>([]);
   const [requests, setRequests] = useState<FriendRequest[]>([]);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [message, setMessage] = useState("");
@@ -764,13 +866,19 @@ function DiscoverScreen({ api, me }: { api: ApiClient; me: Me }) {
 
   const search = async () => {
     setMessage("");
-    const response = await api.get<{ result: SearchResult | null }>(`/users/search?emId=${encodeURIComponent(query)}`);
-    setResult(response.result ? normalizeFriend(response.result) : null);
+    if (!query) return;
+    const response = await api.get<{ result: SearchResult | null; results?: SearchResult[] }>(`/users/search?emId=${encodeURIComponent(query)}`);
+    const nextResults = (response.results ?? (response.result ? [response.result] : [])).map(normalizeFriend);
+    setResults(nextResults);
+    if (nextResults.length === 0) {
+      setMessage("검색 결과가 없습니다.");
+    }
   };
 
   const requestFriend = async (targetUserId: string) => {
     await api.post("/friends/requests", { targetUserId });
     setMessage("친구 요청을 보냈습니다.");
+    setResults((current) => current.map((item) => (item.id === targetUserId ? { ...item, relation: "request_sent" } : item)));
     await load();
   };
 
@@ -779,34 +887,48 @@ function DiscoverScreen({ api, me }: { api: ApiClient; me: Me }) {
       <aside className="list-pane">
         <Header title="찾기" />
         <div className="search-row strong">
-          <Hash size={17} />
-          <input placeholder="#testemid" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => event.key === "Enter" && search()} />
-          <button onClick={search}>검색</button>
+          <div className="handle-input search-handle">
+            <span>#</span>
+            <input
+              placeholder="em_id"
+              maxLength={12}
+              value={query}
+              onChange={(event) => setQuery(cleanHandleInput(event.target.value))}
+              onKeyDown={(event) => event.key === "Enter" && search()}
+            />
+          </div>
+          <button disabled={!query} onClick={search}>
+            검색
+          </button>
         </div>
         {message && <p className="notice">{message}</p>}
-        {result && (
-          <article className="result-panel">
-            {result.previousHandleNotice && (
-              <p className="notice">
-                {result.previousHandleNotice.previousHandle}은 현재 {result.previousHandleNotice.currentHandle}로 변경되었습니다.
+        <div className="search-results">
+          {results.map((result) => (
+            <article key={result.id} className="result-panel compact-result">
+              {result.previousHandleNotice && (
+                <p className="notice">
+                  {result.previousHandleNotice.previousHandle}은 현재 {result.previousHandleNotice.currentHandle}로 변경되었습니다.
+                </p>
+              )}
+              <Avatar name={result.name} src={result.avatarUrl} large />
+              <h2>{result.name}</h2>
+              <p>
+                {ensureDisplayHandle(result.emHandle)}
+                {result.statusText && <em>{result.statusText}</em>}
               </p>
-            )}
-            <Avatar name={result.name} src={result.avatarUrl} large />
-            <h2>{result.name}</h2>
-            <p>
-              {ensureDisplayHandle(result.emHandle)}
-              {result.statusText && <em>{result.statusText}</em>}
-            </p>
-            {result.relation === "none" && (
-              <button className="primary-button" onClick={() => requestFriend(result.id)}>
-                <UserPlus size={18} />
-                친구 요청
-              </button>
-            )}
-            {result.relation === "friend" && <span className="status-pill">이미 친구</span>}
-            {result.relation === "request_sent" && <span className="status-pill">요청 보냄</span>}
-          </article>
-        )}
+              {result.relation === "none" && (
+                <button className="primary-button" onClick={() => requestFriend(result.id)}>
+                  <UserPlus size={18} />
+                  친구 요청
+                </button>
+              )}
+              {result.relation === "self" && <span className="status-pill">내 계정</span>}
+              {result.relation === "friend" && <span className="status-pill">이미 친구</span>}
+              {result.relation === "request_sent" && <span className="status-pill">요청 보냄</span>}
+              {result.relation === "request_received" && <span className="status-pill">받은 요청 있음</span>}
+            </article>
+          ))}
+        </div>
       </aside>
       <section className="detail-pane discover-detail">
         <div className="section-block">
@@ -899,20 +1021,28 @@ function NotificationsScreen({ api }: { api: ApiClient }) {
 function ProfileScreen({
   api,
   me,
+  appInstalled,
+  canInstallPwa,
+  onInstallPwa,
   onLogout,
   onMeChange
 }: {
   api: ApiClient;
   me: Me;
+  appInstalled: boolean;
+  canInstallPwa: boolean;
+  onInstallPwa: () => Promise<boolean>;
   onLogout: () => void;
   onMeChange: (me: Me) => void;
 }) {
+  const avatarInputRef = useRef<HTMLInputElement | null>(null);
   const [name, setName] = useState(me.name ?? "");
-  const [emHandle, setEmHandle] = useState(me.emHandle ?? "");
+  const [emHandle, setEmHandle] = useState(cleanHandleInput(me.emHandle ?? ""));
   const [statusText, setStatusText] = useState("");
   const [visibility, setVisibility] = useState<"friends" | "public">("friends");
   const [theme, setThemeState] = useState(localStorage.getItem("em.theme") || "light");
   const [message, setMessage] = useState("");
+  const [avatarBusy, setAvatarBusy] = useState(false);
 
   const saveProfile = async () => {
     const response = await api.patch<{ user: Me }>("/me/profile", { name });
@@ -921,9 +1051,33 @@ function ProfileScreen({
   };
 
   const saveHandle = async () => {
-    const response = await api.patch<{ user: Me }>("/me/em-id", { emHandle });
+    const response = await api.patch<{ user: Me }>("/me/em-id", { emHandle: displayEmHandle(emHandle) });
     onMeChange(response.user);
     setMessage("em아이디를 변경했습니다. 이전 아이디는 20일간 보호됩니다.");
+  };
+
+  const uploadAvatar = async (file: File) => {
+    setAvatarBusy(true);
+    setMessage("");
+    try {
+      const presign = await api.post<{ uploadUrl: string; publicUrl: string; key: string }>("/uploads/presign", {
+        fileName: file.name,
+        contentType: file.type || "application/octet-stream",
+        size: file.size
+      });
+      await fetch(presign.uploadUrl, {
+        method: "PUT",
+        headers: { "Content-Type": file.type || "application/octet-stream" },
+        body: file
+      });
+      const response = await api.patch<{ user: Me }>("/me/profile", { avatarUrl: presign.publicUrl });
+      onMeChange(response.user);
+      setMessage("프로필 사진을 변경했습니다.");
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    } finally {
+      setAvatarBusy(false);
+    }
   };
 
   const saveStatus = async () => {
@@ -953,14 +1107,42 @@ function ProfileScreen({
     setThemeState(value);
   };
 
+  const installApp = async () => {
+    if (appInstalled) {
+      setMessage("이미 설치된 앱으로 실행 중입니다.");
+      return;
+    }
+    const accepted = await onInstallPwa();
+    setMessage(accepted ? "앱 설치를 시작했습니다." : "브라우저 메뉴에서 앱 설치 또는 홈 화면에 추가를 선택해주세요.");
+  };
+
   return (
     <section className="single-view profile-view">
       <Header title="내정보" />
       <div className="settings-grid">
         <section className="settings-section">
+          <input
+            ref={avatarInputRef}
+            hidden
+            type="file"
+            accept="image/*"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) uploadAvatar(file).catch(() => undefined);
+              event.currentTarget.value = "";
+            }}
+          />
           <Avatar name={me.name ?? "나"} src={me.avatarUrl} large />
           <h2>{me.name}</h2>
           <p>{me.emHandle}</p>
+          <button className="ghost-button" disabled={avatarBusy} onClick={() => avatarInputRef.current?.click()}>
+            <Camera size={18} />
+            프사 바꾸기
+          </button>
+          <button className="ghost-button pwa-button" onClick={installApp} disabled={appInstalled}>
+            <Download size={18} />
+            {appInstalled ? "앱 설치됨" : canInstallPwa ? "PWA 앱 설치" : "앱 설치 안내"}
+          </button>
           {message && <p className="notice">{message}</p>}
         </section>
         <section className="settings-section">
@@ -977,12 +1159,15 @@ function ProfileScreen({
           <h3>em아이디</h3>
           <label className="field">
             <span>아이디</span>
-            <input value={emHandle} onChange={(event) => setEmHandle(event.target.value)} />
+            <div className="handle-input">
+              <span>#</span>
+              <input value={emHandle} maxLength={12} onChange={(event) => setEmHandle(cleanHandleInput(event.target.value))} />
+            </div>
           </label>
-          <button className="primary-button" onClick={saveHandle}>
+          <button className="primary-button" disabled={emHandle.length < 3} onClick={saveHandle}>
             변경
           </button>
-          <p className="hint">이전 em아이디는 20일 동안 보호되고 검색 시 새 아이디 안내가 표시됩니다.</p>
+          <p className="hint">3-12자, a-z / 0-9 / - / _ 만 사용할 수 있습니다. 이전 em아이디는 20일 동안 보호됩니다.</p>
         </section>
         <section className="settings-section">
           <h3>상태메시지</h3>
@@ -1086,6 +1271,10 @@ function normalizeFriend<T extends { emHandle: string }>(friend: T): T {
 
 function ensureDisplayHandle(handle: string) {
   return handle.startsWith("#") ? handle : displayEmHandle(handle);
+}
+
+function cleanHandleInput(value: string) {
+  return normalizeEmHandle(value).replace(/[^a-z0-9_-]/g, "").slice(0, 12);
 }
 
 function getErrorMessage(error: unknown): string {
