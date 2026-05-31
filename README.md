@@ -308,14 +308,12 @@ curl https://em33.kro.kr/api/health
 
 ```bash
 cd /opt/everyonemessage
-sudo -u emapp git pull
-sudo -u emapp npm ci
-sudo -u emapp npm run build
-sudo systemctl restart everyonemessage-api
-sudo systemctl reload caddy
+sudo bash gitpull.sh
 ```
 
 프론트 환경변수(`VITE_...`)를 바꿨으면 반드시 `npm run build`를 다시 해야 합니다.
+
+`gitpull.sh`는 내부에서 `sudo git pull`, `sudo npm ci`, `sudo npm run build`, API 재시작, Caddy 설정 검증/리로드, 헬스체크까지 실행합니다.
 
 ## 환경변수 설정
 
