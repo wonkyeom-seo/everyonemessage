@@ -1,0 +1,25 @@
+{
+  email {$CADDY_EMAIL}
+}
+
+{$APP_DOMAIN} {
+  encode zstd gzip
+
+  handle /api/* {
+    reverse_proxy 127.0.0.1:4000
+  }
+
+  handle /socket.io/* {
+    reverse_proxy 127.0.0.1:4000
+  }
+
+  handle /files/* {
+    reverse_proxy 127.0.0.1:4000
+  }
+
+  handle {
+    root * /opt/everyonemessage/apps/web/dist
+    try_files {path} /index.html
+    file_server
+  }
+}

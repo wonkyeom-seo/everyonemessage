@@ -2,7 +2,6 @@ import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import Fastify from "fastify";
-import type { S3Client } from "@aws-sdk/client-s3";
 import {
   createDirectConversationSchema,
   createFriendRequestSchema,
@@ -26,7 +25,7 @@ import { queryMany, queryOne } from "./db";
 import { HttpError, sendError } from "./errors";
 import { sendWebPush } from "./push";
 import type { Realtime } from "./realtime";
-import { createUploadUrl } from "./storage";
+import { createUploadUrl, readLocalFile, saveLocalUpload, type StorageService } from "./storage";
 
 interface Runtime {
   realtime: Realtime | null;
@@ -50,11 +49,16 @@ interface AuthedContext {
   user: UserRow;
 }
 
-export function createApi(config: AppConfig, db: Db, storage: S3Client, runtime: Runtime): FastifyInstance {
+export function createApi(config: AppConfig, db: Db, storage: StorageService, runtime: Runtime): FastifyInstance {
   const app = Fastify({
+    bodyLimit: 50 * 1024 * 1024,
     logger: {
       level: config.NODE_ENV === "production" ? "info" : "warn"
     }
+  });
+
+  app.addContentTypeParser("*", { parseAs: "buffer", bodyLimit: 50 * 1024 * 1024 }, (_request, body, done) => {
+    done(null, body);
   });
 
   app.register(helmet, { global: true });
@@ -69,6 +73,20 @@ export function createApi(config: AppConfig, db: Db, storage: S3Client, runtime:
   });
 
   app.get("/api/health", async () => ({ ok: true, service: "everyonemessage-api" }));
+
+  app.get("/files/*", async (request, reply) => {
+    if (config.FILE_STORAGE !== "local") {
+      throw new HttpError(404, "파일을 찾을 수 없습니다.");
+    }
+    const key = (request.params as { "*": string })["*"];
+    const file = await readLocalFile(config, key);
+    if (!file) {
+      throw new HttpError(404, "파일을 찾을 수 없습니다.");
+    }
+    reply.header("Content-Type", file.contentType);
+    reply.header("Content-Length", String(file.size));
+    return reply.send(file.stream);
+  });
 
   app.get("/api/me", async (request) => {
     const { user } = await getOptionalProfile(request, db, config);
@@ -669,6 +687,18 @@ export function createApi(config: AppConfig, db: Db, storage: S3Client, runtime:
       throw new HttpError(400, "파일 크기가 제한을 초과했습니다.");
     }
     return createUploadUrl(storage, config, user.id, body.fileName, body.contentType);
+  });
+
+  app.put("/api/uploads/local/:token", async (request) => {
+    if (config.FILE_STORAGE !== "local") {
+      throw new HttpError(404, "로컬 파일 업로드가 비활성화되어 있습니다.");
+    }
+    const { token } = request.params as { token: string };
+    const body = request.body;
+    if (!Buffer.isBuffer(body)) {
+      throw new HttpError(400, "업로드 파일 본문이 필요합니다.");
+    }
+    return saveLocalUpload(config, token, body);
   });
 
   app.post("/api/blocks", async (request) => {

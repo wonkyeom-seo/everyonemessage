@@ -11,6 +11,10 @@ const envSchema = z.object({
   FIREBASE_PROJECT_ID: z.string().optional(),
   FIREBASE_CLIENT_EMAIL: z.string().optional(),
   FIREBASE_PRIVATE_KEY: z.string().optional(),
+  FILE_STORAGE: z.enum(["local", "s3"]).default("local"),
+  LOCAL_UPLOAD_DIR: z.string().default("uploads"),
+  LOCAL_FILE_PUBLIC_PATH: z.string().default("/files"),
+  UPLOAD_TOKEN_SECRET: z.string().optional(),
   S3_ENDPOINT: z.string().default("http://localhost:9000"),
   S3_REGION: z.string().default("us-east-1"),
   S3_BUCKET: z.string().default("everyonemessage"),
@@ -33,6 +37,14 @@ export function loadConfig(): AppConfig {
     if (missing.length > 0) {
       throw new Error(`Missing Firebase Admin env for AUTH_MODE=firebase: ${missing.join(", ")}`);
     }
+  }
+  if (
+    config.FILE_STORAGE === "local" &&
+    config.NODE_ENV === "production" &&
+    !config.UPLOAD_TOKEN_SECRET &&
+    !config.VAPID_PRIVATE_KEY
+  ) {
+    throw new Error("FILE_STORAGE=local in production requires UPLOAD_TOKEN_SECRET or VAPID_PRIVATE_KEY");
   }
   return config;
 }
