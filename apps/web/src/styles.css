@@ -824,6 +824,15 @@ em {
   margin-bottom: 14px;
 }
 
+.friend-requests-block {
+  margin-top: 14px;
+}
+
+.request-row.highlight {
+  outline: 2px solid var(--primary);
+  background: rgba(22, 99, 255, 0.1);
+}
+
 .section-block h2,
 .settings-section h3 {
   margin: 0;

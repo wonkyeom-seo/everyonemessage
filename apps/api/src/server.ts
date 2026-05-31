@@ -295,11 +295,14 @@ export function createApi(config: AppConfig, db: Db, storage: StorageService, ru
        RETURNING id, state, created_at AS "createdAt"`,
       [user.id, input.targetUserId]
     );
+    if (!created) {
+      throw new HttpError(500, "친구 요청을 만들지 못했습니다.");
+    }
     await createNotification(db, config, runtime, input.targetUserId, {
       kind: "friend_request",
       title: "친구 요청",
       body: `${user.name}님이 친구 요청을 보냈습니다.`,
-      linkPath: "/discover"
+      linkPath: `/discover?focus=requests&requestId=${created.id}`
     });
     return { request: created };
   });

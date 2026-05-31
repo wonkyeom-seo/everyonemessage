@@ -845,11 +845,15 @@ function FriendsScreen({ api, me }: { api: ApiClient; me: Me }) {
 }
 
 function DiscoverScreen({ api, me }: { api: ApiClient; me: Me }) {
+  const location = useLocation();
+  const requestSectionRef = useRef<HTMLDivElement | null>(null);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [requests, setRequests] = useState<FriendRequest[]>([]);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [message, setMessage] = useState("");
+  const focus = new URLSearchParams(location.search).get("focus");
+  const focusedRequestId = new URLSearchParams(location.search).get("requestId");
 
   const load = useCallback(async () => {
     const [requestResponse, recommendationResponse] = await Promise.all([
@@ -863,6 +867,12 @@ function DiscoverScreen({ api, me }: { api: ApiClient; me: Me }) {
   useEffect(() => {
     load().catch(() => undefined);
   }, [load]);
+
+  useEffect(() => {
+    if (focus === "requests") {
+      requestSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [focus, requests.length]);
 
   const search = async () => {
     setMessage("");
@@ -929,15 +939,13 @@ function DiscoverScreen({ api, me }: { api: ApiClient; me: Me }) {
             </article>
           ))}
         </div>
-      </aside>
-      <section className="detail-pane discover-detail">
-        <div className="section-block">
+        <div ref={requestSectionRef} id="friend-requests" className="section-block friend-requests-block">
           <h2>친구 요청</h2>
           {requests.length === 0 && <p className="muted">처리할 요청이 없습니다.</p>}
           {requests.map((request) => {
             const incoming = request.addresseeId === me.id;
             return (
-              <article key={request.id} className="request-row">
+              <article key={request.id} className={`request-row ${request.id === focusedRequestId ? "highlight" : ""}`}>
                 <span>
                   <strong>{incoming ? request.requesterName : request.addresseeName}</strong>
                   <small>{ensureDisplayHandle(incoming ? request.requesterEmHandle : request.addresseeEmHandle)}</small>
@@ -954,6 +962,8 @@ function DiscoverScreen({ api, me }: { api: ApiClient; me: Me }) {
             );
           })}
         </div>
+      </aside>
+      <section className="detail-pane discover-detail">
         <div className="section-block">
           <h2>친구추천</h2>
           {recommendations.length === 0 && <p className="muted">겹치는 친구가 생기면 추천이 표시됩니다.</p>}
