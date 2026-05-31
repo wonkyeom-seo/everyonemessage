@@ -156,6 +156,7 @@ VITE_VAPID_PUBLIC_KEY=VAPID_Public_Key
 
 NODE_ENV=production
 PORT=4000
+HOST=127.0.0.1
 WEB_ORIGIN=https://em33.kro.kr
 DATABASE_URL=postgres://em:여기에_강한_DB_비밀번호@localhost:5432/everyonemessage
 REDIS_URL=redis://localhost:6379
@@ -178,6 +179,8 @@ VAPID_SUBJECT=mailto:swk1072@gmail.com
 중요한 점:
 
 - `WEB_ORIGIN=https://em33.kro.kr` 뒤에 공백을 넣지 않습니다.
+- Docker 없이 Caddy 뒤에서 실행할 때는 `HOST=127.0.0.1`로 둡니다.
+- 웹앱의 `VITE_...` 값은 빌드할 때 정적 파일 안에 들어갑니다. `.env`를 고친 뒤에는 반드시 `npm run build`를 다시 실행해야 합니다.
 - `FIREBASE_PRIVATE_KEY`는 처음부터 끝까지 전체 키가 있어야 합니다.
 - private key의 실제 줄바꿈은 `\n`으로 넣습니다.
 - `VITE_`로 시작하는 값은 프론트 빌드 때 박힙니다. 바꾸면 `npm run build`를 다시 해야 합니다.

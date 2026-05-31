@@ -38,6 +38,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: 4000
+      HOST: 0.0.0.0
       WEB_ORIGIN: https://${APP_DOMAIN:-localhost}
       DATABASE_URL: postgres://em:em_password@postgres:5432/everyonemessage
       REDIS_URL: redis://redis:6379

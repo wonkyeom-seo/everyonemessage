@@ -1,8 +1,8 @@
 {
-  email {$CADDY_EMAIL}
+  email {$CADDY_EMAIL:admin@example.com}
 }
 
-{$APP_DOMAIN} {
+{$APP_DOMAIN:localhost} {
   encode zstd gzip
 
   handle /api/* {

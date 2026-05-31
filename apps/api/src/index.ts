@@ -13,7 +13,7 @@ await runMigrations(db);
 
 const app = createApi(config, db, storage, runtime);
 
-await app.listen({ port: config.PORT, host: "0.0.0.0" });
+await app.listen({ port: config.PORT, host: config.HOST });
 runtime.realtime = createRealtime(app.server, config, db);
 
 const shutdown = async () => {

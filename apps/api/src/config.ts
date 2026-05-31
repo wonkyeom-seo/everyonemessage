@@ -4,6 +4,7 @@ import { z } from "zod";
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().positive().default(4000),
+  HOST: z.string().default("127.0.0.1"),
   WEB_ORIGIN: z.string().default("http://localhost:3000"),
   DATABASE_URL: z.string().default("postgres://em:em_password@localhost:5432/everyonemessage"),
   REDIS_URL: z.string().default("redis://localhost:6379"),
