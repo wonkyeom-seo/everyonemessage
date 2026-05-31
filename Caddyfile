@@ -2,12 +2,24 @@
   email swk1072@gmail.com
   acme_ca https://acme.zerossl.com/v2/DV90
 }
-{$APP_DOMAIN} {
+em33.kro.kr {
   encode zstd gzip
 
-  reverse_proxy /api/* api:4000
-  reverse_proxy /socket.io/* api:4000
-  reverse_proxy /files/* api:4000
+  handle /api/* {
+    reverse_proxy 127.0.0.1:4000
+  }
 
-  reverse_proxy web:3000
+  handle /socket.io/* {
+    reverse_proxy 127.0.0.1:4000
+  }
+
+  handle /files/* {
+    reverse_proxy 127.0.0.1:4000
+  }
+
+  handle {
+    root * /opt/everyonemessage/apps/web/dist
+    try_files {path} /index.html
+    file_server
+  }
 }
