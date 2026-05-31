@@ -619,7 +619,21 @@ export function createApi(config: AppConfig, db: Db, storage: StorageService, ru
       `SELECT m.id, m.conversation_id AS "conversationId", m.sender_id AS "senderId",
               sender.name AS "senderName", m.kind, m.text, m.attachments, m.link_previews AS "linkPreviews",
               m.edited_at::text AS "editedAt", m.deleted_for_all_at::text AS "deletedForAllAt",
-              m.created_at::text AS "createdAt"
+              m.created_at::text AS "createdAt",
+              (
+                SELECT COUNT(*)::int
+                FROM conversation_members cm_count
+                WHERE cm_count.conversation_id = m.conversation_id AND cm_count.left_at IS NULL
+              ) AS "memberCount",
+              (
+                SELECT COUNT(*)::int
+                FROM conversation_members cm_read
+                WHERE cm_read.conversation_id = m.conversation_id
+                  AND cm_read.user_id <> m.sender_id
+                  AND cm_read.left_at IS NULL
+                  AND cm_read.last_read_at IS NOT NULL
+                  AND cm_read.last_read_at >= m.created_at
+              ) AS "readByCount"
        FROM messages m
        LEFT JOIN users sender ON sender.id = m.sender_id
        WHERE m.conversation_id = $1
@@ -648,12 +662,24 @@ export function createApi(config: AppConfig, db: Db, storage: StorageService, ru
     }));
     const message = await queryOne(
       db,
-      `INSERT INTO messages (conversation_id, sender_id, kind, text, attachments, link_previews, client_id)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7)
-       ON CONFLICT (conversation_id, sender_id, client_id) DO UPDATE SET client_id = EXCLUDED.client_id
-       RETURNING id, conversation_id AS "conversationId", sender_id AS "senderId", kind, text,
-                 attachments, link_previews AS "linkPreviews", created_at::text AS "createdAt",
-                 edited_at::text AS "editedAt", deleted_for_all_at::text AS "deletedForAllAt"`,
+      `WITH saved AS (
+         INSERT INTO messages (conversation_id, sender_id, kind, text, attachments, link_previews, client_id)
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7)
+         ON CONFLICT (conversation_id, sender_id, client_id) DO UPDATE SET client_id = EXCLUDED.client_id
+         RETURNING id, conversation_id, sender_id, kind, text, attachments, link_previews, created_at, edited_at, deleted_for_all_at
+       )
+       SELECT saved.id, saved.conversation_id AS "conversationId", saved.sender_id AS "senderId",
+              sender.name AS "senderName", saved.kind, saved.text, saved.attachments,
+              saved.link_previews AS "linkPreviews", saved.created_at::text AS "createdAt",
+              saved.edited_at::text AS "editedAt", saved.deleted_for_all_at::text AS "deletedForAllAt",
+              (
+                SELECT COUNT(*)::int
+                FROM conversation_members cm_count
+                WHERE cm_count.conversation_id = saved.conversation_id AND cm_count.left_at IS NULL
+              ) AS "memberCount",
+              0::int AS "readByCount"
+       FROM saved
+       LEFT JOIN users sender ON sender.id = saved.sender_id`,
       [
         id,
         user.id,
@@ -743,11 +769,15 @@ export function createApi(config: AppConfig, db: Db, storage: StorageService, ru
     const { user } = await requireProfile(request, db, config);
     const { id } = request.params as { id: string };
     await assertConversationMember(db, id, user.id);
-    await db.query(
-      "UPDATE conversation_members SET last_read_at = now() WHERE conversation_id = $1 AND user_id = $2",
+    const updated = await queryOne<{ lastReadAt: string }>(
+      db,
+      `UPDATE conversation_members
+       SET last_read_at = now()
+       WHERE conversation_id = $1 AND user_id = $2
+       RETURNING last_read_at::text AS "lastReadAt"`,
       [id, user.id]
     );
-    runtime.realtime?.emitToConversation(id, "message:read", { conversationId: id, userId: user.id });
+    runtime.realtime?.emitToConversation(id, "message:read", { conversationId: id, userId: user.id, readAt: updated?.lastReadAt ?? new Date().toISOString() });
     return { ok: true };
   });
 

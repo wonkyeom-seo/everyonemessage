@@ -558,15 +558,19 @@ function ConversationPane({
 }) {
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const longPressTimerRef = useRef<number | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [actionMessageId, setActionMessageId] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const loadMessages = useCallback(async () => {
+  const loadMessages = useCallback(async (markRead = true) => {
     if (!conversationId) return;
     const response = await api.get<{ messages: Message[] }>(`/conversations/${conversationId}/messages`);
     setMessages(response.messages);
-    await api.post(`/conversations/${conversationId}/read`);
+    if (markRead) {
+      await api.post(`/conversations/${conversationId}/read`);
+    }
   }, [api, conversationId]);
 
   useEffect(() => {
@@ -579,6 +583,9 @@ function ConversationPane({
     const onNew = (message: Message) => {
       if (message.conversationId === conversationId) {
         setMessages((current) => (current.some((item) => item.id === message.id) ? current : [...current, message]));
+        if (message.senderId !== me.id) {
+          api.post(`/conversations/${conversationId}/read`).catch(() => undefined);
+        }
       }
     };
     const onEdit = (payload: { id: string; text: string }) => {
@@ -591,15 +598,63 @@ function ConversationPane({
         )
       );
     };
+    const onRead = (payload: { conversationId: string; userId: string; readAt: string }) => {
+      if (payload.conversationId === conversationId && payload.userId !== me.id) {
+        loadMessages(false).catch(() => undefined);
+      }
+    };
     socket.on("message:new", onNew);
     socket.on("message:edit", onEdit);
     socket.on("message:delete", onDelete);
+    socket.on("message:read", onRead);
     return () => {
       socket.off("message:new", onNew);
       socket.off("message:edit", onEdit);
       socket.off("message:delete", onDelete);
+      socket.off("message:read", onRead);
     };
-  }, [conversationId, socket]);
+  }, [api, conversationId, loadMessages, me.id, socket]);
+
+  useEffect(() => {
+    const closeActions = () => setActionMessageId(null);
+    window.addEventListener("click", closeActions);
+    return () => window.removeEventListener("click", closeActions);
+  }, []);
+
+  const clearLongPress = () => {
+    if (longPressTimerRef.current) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  const openMessageActions = (message: Message) => {
+    if (message.senderId !== me.id || message.deletedForAllAt) return;
+    setActionMessageId((current) => (current === message.id ? null : message.id));
+  };
+
+  const startLongPress = (event: React.PointerEvent, message: Message) => {
+    if (event.pointerType !== "touch" || message.senderId !== me.id || message.deletedForAllAt) return;
+    clearLongPress();
+    longPressTimerRef.current = window.setTimeout(() => {
+      setActionMessageId(message.id);
+      longPressTimerRef.current = null;
+    }, 520);
+  };
+
+  const editMessage = async (message: Message) => {
+    setActionMessageId(null);
+    const next = window.prompt("메시지 수정", message.text ?? "");
+    if (next && next.trim()) {
+      await api.patch(`/messages/${message.id}`, { text: next });
+    }
+  };
+
+  const deleteMessage = async (message: Message) => {
+    setActionMessageId(null);
+    await api.delete(`/messages/${message.id}?scope=all`);
+    await loadMessages(false);
+  };
 
   const sendText = async () => {
     if (!conversationId || !text.trim()) return;
@@ -677,7 +732,21 @@ function ConversationPane({
         {messages.map((message) => {
           const mine = message.senderId === me.id;
           return (
-            <article key={message.id} className={`message ${mine ? "mine" : ""}`}>
+            <article
+              key={message.id}
+              className={`message ${mine ? "mine" : ""}`}
+              onContextMenu={(event) => {
+                if (mine && !message.deletedForAllAt) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  openMessageActions(message);
+                }
+              }}
+              onPointerDown={(event) => startLongPress(event, message)}
+              onPointerUp={clearLongPress}
+              onPointerCancel={clearLongPress}
+              onPointerMove={clearLongPress}
+            >
               {!mine && <small className="sender-name">{message.senderName}</small>}
               <div className="bubble">
                 {message.deletedForAllAt ? (
@@ -707,19 +776,14 @@ function ConversationPane({
                   </>
                 )}
               </div>
-              {mine && !message.deletedForAllAt && (
-                <div className="message-actions">
-                  <button
-                    onClick={async () => {
-                      const next = window.prompt("메시지 수정", message.text ?? "");
-                      if (next) await api.patch(`/messages/${message.id}`, { text: next });
-                    }}
-                  >
-                    수정
-                  </button>
-                  <button onClick={() => api.delete(`/messages/${message.id}?scope=all`).then(loadMessages)}>
-                    삭제
-                  </button>
+              <div className="message-meta">
+                <time dateTime={message.createdAt}>{formatMessageTime(message.createdAt)}</time>
+                {mine && !message.deletedForAllAt && <span className="read-receipt">{readReceiptLabel(message)}</span>}
+              </div>
+              {mine && !message.deletedForAllAt && actionMessageId === message.id && (
+                <div className="message-action-menu" onClick={(event) => event.stopPropagation()}>
+                  <button onClick={() => editMessage(message)}>수정</button>
+                  <button onClick={() => deleteMessage(message)}>삭제</button>
                 </div>
               )}
             </article>
@@ -1355,6 +1419,28 @@ function ensureDisplayHandle(handle: string) {
 
 function cleanHandleInput(value: string) {
   return normalizeEmHandle(value).replace(/[^a-z0-9_-]/g, "").slice(0, 12);
+}
+
+function formatMessageTime(value: string) {
+  const date = new Date(value);
+  return new Intl.DateTimeFormat("ko-KR", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
+}
+
+function readReceiptLabel(message: Message) {
+  const otherMemberCount = Math.max((message.memberCount ?? 1) - 1, 0);
+  if (otherMemberCount === 0) {
+    return "나만 보기";
+  }
+  const readByCount = Math.min(message.readByCount ?? 0, otherMemberCount);
+  if (otherMemberCount === 1) {
+    return readByCount > 0 ? "읽음" : "안읽음";
+  }
+  return `읽음 ${readByCount}/${otherMemberCount}`;
 }
 
 function getErrorMessage(error: unknown): string {

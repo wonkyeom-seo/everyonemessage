@@ -74,6 +74,8 @@ export interface Message {
   editedAt: string | null;
   deletedForAllAt: string | null;
   createdAt: string;
+  memberCount: number;
+  readByCount: number;
 }
 
 export interface NotificationItem {

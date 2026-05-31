@@ -647,6 +647,7 @@ em {
 }
 
 .message {
+  position: relative;
   max-width: min(78%, 560px);
   display: grid;
   gap: 4px;
@@ -715,18 +716,48 @@ em {
   color: rgba(255, 255, 255, 0.78);
 }
 
-.message-actions {
+.message-meta {
   display: flex;
   gap: 6px;
+  align-items: center;
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.message.mine .message-meta {
   justify-content: flex-end;
 }
 
-.message-actions button {
-  padding: 4px 7px;
+.read-receipt {
+  color: var(--primary-strong);
+  font-weight: 800;
+}
+
+.message-action-menu {
+  justify-self: end;
+  display: flex;
+  gap: 6px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.message-action-menu button {
+  min-width: 48px;
+  height: 30px;
+  padding: 0 9px;
   border-radius: 6px;
   background: var(--surface-soft);
-  color: var(--muted);
+  color: var(--text);
   font-size: 12px;
+  font-weight: 800;
+}
+
+.message-action-menu button:last-child {
+  color: var(--danger);
 }
 
 .composer {
