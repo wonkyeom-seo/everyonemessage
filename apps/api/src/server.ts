@@ -26,7 +26,7 @@ import { queryMany, queryOne } from "./db";
 import { HttpError, sendError } from "./errors";
 import { sendWebPush } from "./push";
 import type { Realtime } from "./realtime";
-import { createUploadUrl, readLocalFile, saveLocalUpload, type StorageService } from "./storage";
+import { createUploadUrl, readLocalFile, saveLocalUpload, saveLocalUserFile, type StorageService } from "./storage";
 
 interface Runtime {
   realtime: Realtime | null;
@@ -119,6 +119,33 @@ export function createApi(config: AppConfig, db: Db, storage: StorageService, ru
        WHERE id = $1
        RETURNING *`,
       [user.id, input.name ?? null, input.avatarUrl ?? null, input.bio ?? null]
+    );
+    return { user: toMe(requireRow(updated)) };
+  });
+
+  app.put("/api/me/avatar", async (request) => {
+    const { user } = await requireProfile(request, db, config);
+    if (config.FILE_STORAGE !== "local") {
+      throw new HttpError(400, "현재 서버는 로컬 프로필 업로드가 비활성화되어 있습니다.");
+    }
+    const body = request.body;
+    if (!Buffer.isBuffer(body) || body.length === 0) {
+      throw new HttpError(400, "업로드할 이미지가 필요합니다.");
+    }
+    if (body.length > 10 * 1024 * 1024) {
+      throw new HttpError(400, "프로필 이미지는 10MB 이하만 업로드할 수 있습니다.");
+    }
+    const contentType = String(request.headers["content-type"] ?? "application/octet-stream").split(";")[0];
+    if (!contentType.startsWith("image/")) {
+      throw new HttpError(400, "이미지 파일만 프로필 사진으로 사용할 수 있습니다.");
+    }
+    const rawFileName = request.headers["x-file-name"];
+    const fileName = Array.isArray(rawFileName) ? rawFileName[0] : rawFileName;
+    const saved = await saveLocalUserFile(config, user.id, fileName ? decodeURIComponent(fileName) : "avatar", contentType, body);
+    const updated = await queryOne<UserRow>(
+      db,
+      "UPDATE users SET avatar_url = $2, updated_at = now() WHERE id = $1 RETURNING *",
+      [user.id, saved.publicUrl]
     );
     return { user: toMe(requireRow(updated)) };
   });
@@ -302,7 +329,7 @@ export function createApi(config: AppConfig, db: Db, storage: StorageService, ru
       kind: "friend_request",
       title: "친구 요청",
       body: `${user.name}님이 친구 요청을 보냈습니다.`,
-      linkPath: `/discover?focus=requests&requestId=${created.id}`
+      linkPath: `/friends?focus=requests&requestId=${created.id}`
     });
     return { request: created };
   });
@@ -370,7 +397,7 @@ export function createApi(config: AppConfig, db: Db, storage: StorageService, ru
        )
        SELECT u.id, u.name, u.em_handle AS "emHandle", u.avatar_url AS "avatarUrl",
               COUNT(DISTINCT c.mutual_id)::int AS "mutualCount",
-              ARRAY_REMOVE(ARRAY_AGG(DISTINCT mf_user.name), NULL)[1:3] AS "mutualNames",
+              (ARRAY_REMOVE(ARRAY_AGG(DISTINCT mf_user.name), NULL))[1:3] AS "mutualNames",
               s.text AS "statusText"
        FROM candidates c
        JOIN users u ON u.id = c.candidate_id
@@ -434,7 +461,7 @@ export function createApi(config: AppConfig, db: Db, storage: StorageService, ru
          AND (cm_self.last_read_at IS NULL OR unread.created_at > cm_self.last_read_at)
        LEFT JOIN direct_conversations dc ON dc.conversation_id = m.id
        LEFT JOIN users direct_peer ON direct_peer.id = CASE WHEN dc.user_a_id = $1 THEN dc.user_b_id ELSE dc.user_a_id END
-       GROUP BY m.id, m.kind, m.title, m.avatar_url, lm.text, lm.created_at, direct_peer.name, direct_peer.avatar_url
+       GROUP BY m.id, m.kind, m.title, m.avatar_url, m.updated_at, lm.text, lm.created_at, direct_peer.name, direct_peer.avatar_url
        ORDER BY COALESCE(lm.created_at, m.updated_at) DESC`,
       [user.id]
     );
@@ -502,8 +529,7 @@ export function createApi(config: AppConfig, db: Db, storage: StorageService, ru
       `SELECT c.id
        FROM conversations c
        JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $1 AND cm.left_at IS NULL
-       WHERE c.kind = 'direct'
-         AND c.created_by = $1
+       WHERE c.created_by = $1
          AND c.title = '나와의 채팅'
          AND NOT EXISTS (
            SELECT 1 FROM conversation_members other
@@ -519,7 +545,7 @@ export function createApi(config: AppConfig, db: Db, storage: StorageService, ru
     try {
       await client.query("BEGIN");
       const conversation = await client.query<{ id: string }>(
-        "INSERT INTO conversations (kind, title, created_by) VALUES ('direct', '나와의 채팅', $1) RETURNING id",
+        "INSERT INTO conversations (kind, title, created_by) VALUES ('group', '나와의 채팅', $1) RETURNING id",
         [user.id]
       );
       const conversationId = conversation.rows[0].id;

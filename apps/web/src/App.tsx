@@ -457,6 +457,7 @@ function ChatScreen({ api, me, socket }: { api: ApiClient; me: Me; socket: Socke
   const navigate = useNavigate();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [notice, setNotice] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -484,8 +485,13 @@ function ChatScreen({ api, me, socket }: { api: ApiClient; me: Me; socket: Socke
   }, [load, socket]);
 
   const startSelfChat = async () => {
-    const response = await api.post<{ conversationId: string }>("/conversations/self");
-    navigate(`/chats/${response.conversationId}`);
+    setNotice("");
+    try {
+      const response = await api.post<{ conversationId: string }>("/conversations/self");
+      navigate(`/chats/${response.conversationId}`);
+    } catch (error) {
+      setNotice(getErrorMessage(error));
+    }
   };
 
   return (
@@ -507,9 +513,17 @@ function ChatScreen({ api, me, socket }: { api: ApiClient; me: Me; socket: Socke
           <Search size={17} />
           <input placeholder="대화 검색" />
         </div>
+        {notice && <p className="notice error">{notice}</p>}
         <div className="list-stack">
+          <button className="list-row self-row" onClick={startSelfChat}>
+            <Avatar name="나" src={me.avatarUrl} />
+            <span className="row-main">
+              <strong>나와의 채팅</strong>
+              <small>메모와 파일을 나에게 보내기</small>
+            </span>
+          </button>
           {loading && <SkeletonRows />}
-          {!loading && conversations.length === 0 && <EmptyState title="아직 대화가 없습니다" body="친구 탭에서 친구에게 메시지를 시작하세요." />}
+          {!loading && conversations.length === 0 && <EmptyState title="아직 대화가 없습니다" body="친구 탭에서 친구에게 메시지를 시작하거나 나와의 채팅을 열어보세요." />}
           {conversations.map((conversation) => (
             <button
               key={conversation.id}
@@ -608,11 +622,14 @@ function ConversationPane({
         contentType: file.type || "application/octet-stream",
         size: file.size
       });
-      await fetch(presign.uploadUrl, {
+      const uploadResponse = await fetch(presign.uploadUrl, {
         method: "PUT",
         headers: { "Content-Type": file.type || "application/octet-stream" },
         body: file
       });
+      if (!uploadResponse.ok) {
+        throw new ApiError(uploadResponse.status, "파일 업로드에 실패했습니다.");
+      }
       const kind = file.type.startsWith("image/") ? "image" : "file";
       await api.post(`/conversations/${conversationId}/messages`, {
         clientId: crypto.randomUUID(),
@@ -734,25 +751,58 @@ function ConversationPane({
 
 function FriendsScreen({ api, me }: { api: ApiClient; me: Me }) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const requestSectionRef = useRef<HTMLDivElement | null>(null);
   const [friends, setFriends] = useState<Friend[]>([]);
+  const [requests, setRequests] = useState<FriendRequest[]>([]);
   const [selected, setSelected] = useState<Friend | null>(null);
   const [groupMode, setGroupMode] = useState(false);
   const [groupName, setGroupName] = useState("");
   const [checked, setChecked] = useState<Set<string>>(new Set());
+  const focus = new URLSearchParams(location.search).get("focus");
+  const focusedRequestId = new URLSearchParams(location.search).get("requestId");
 
   const load = useCallback(async () => {
-    const response = await api.get<{ friends: Friend[] }>("/friends");
-    setFriends(response.friends.map(normalizeFriend));
-    setSelected((current) => current ?? response.friends[0] ?? null);
-  }, [api]);
+    const [friendResponse, requestResponse] = await Promise.all([
+      api.get<{ friends: Friend[] }>("/friends"),
+      api.get<{ requests: FriendRequest[] }>("/friends/requests")
+    ]);
+    const normalizedFriends = friendResponse.friends.map(normalizeFriend);
+    setFriends(normalizedFriends);
+    setRequests(requestResponse.requests);
+    setSelected((current) => {
+      if (!current) return null;
+      if (current.id === me.id) {
+        return { id: me.id, name: me.name ?? "나", emHandle: me.emHandle ?? "", avatarUrl: me.avatarUrl, statusText: null };
+      }
+      return normalizedFriends.find((friend) => friend.id === current.id) ?? null;
+    });
+  }, [api, me.avatarUrl, me.emHandle, me.id, me.name]);
 
   useEffect(() => {
     load().catch(() => undefined);
   }, [load]);
 
+  useEffect(() => {
+    if (focus === "requests") {
+      setSelected(null);
+      requestSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [focus, requests.length]);
+
   const startDirect = async (friend: Friend) => {
     const response = await api.post<{ conversationId: string }>("/conversations/direct", { friendUserId: friend.id });
     navigate(`/chats/${response.conversationId}`);
+  };
+
+  const acceptRequest = async (id: string) => {
+    await api.post(`/friends/requests/${id}/accept`);
+    await load();
+  };
+
+  const declineRequest = async (id: string) => {
+    await api.post(`/friends/requests/${id}/decline`);
+    await load();
   };
 
   const createGroup = async () => {
@@ -781,6 +831,29 @@ function FriendsScreen({ api, me }: { api: ApiClient; me: Me }) {
             <small>{me.emHandle}</small>
           </span>
         </button>
+        <div ref={requestSectionRef} id="friend-requests" className="section-block friend-requests-block">
+          <h2>친구 요청</h2>
+          {requests.length === 0 && <p className="muted">처리할 요청이 없습니다.</p>}
+          {requests.map((request) => {
+            const incoming = request.addresseeId === me.id;
+            return (
+              <article key={request.id} className={`request-row ${request.id === focusedRequestId ? "highlight" : ""}`}>
+                <span>
+                  <strong>{incoming ? request.requesterName : request.addresseeName}</strong>
+                  <small>{ensureDisplayHandle(incoming ? request.requesterEmHandle : request.addresseeEmHandle)}</small>
+                </span>
+                {incoming ? (
+                  <span className="button-row">
+                    <button onClick={() => acceptRequest(request.id)}>수락</button>
+                    <button onClick={() => declineRequest(request.id)}>거절</button>
+                  </span>
+                ) : (
+                  <small className="muted">대기 중</small>
+                )}
+              </article>
+            );
+          })}
+        </div>
         {groupMode && (
           <div className="inline-form">
             <input placeholder="그룹 이름" value={groupName} onChange={(event) => setGroupName(event.target.value)} />
@@ -1011,7 +1084,8 @@ function NotificationsScreen({ api }: { api: ApiClient }) {
             className={`notification-row ${item.readAt ? "" : "unread"}`}
             onClick={async () => {
               await api.post(`/notifications/${item.id}/read`);
-              if (item.linkPath) navigate(item.linkPath);
+              if (item.kind === "friend_request") navigate(item.linkPath?.startsWith("/friends") ? item.linkPath : "/friends?focus=requests");
+              else if (item.linkPath) navigate(item.linkPath);
               else await load();
             }}
           >
@@ -1070,17 +1144,9 @@ function ProfileScreen({
     setAvatarBusy(true);
     setMessage("");
     try {
-      const presign = await api.post<{ uploadUrl: string; publicUrl: string; key: string }>("/uploads/presign", {
-        fileName: file.name,
-        contentType: file.type || "application/octet-stream",
-        size: file.size
+      const response = await api.putRaw<{ user: Me }>("/me/avatar", file, file.type || "application/octet-stream", {
+        "X-File-Name": encodeURIComponent(file.name)
       });
-      await fetch(presign.uploadUrl, {
-        method: "PUT",
-        headers: { "Content-Type": file.type || "application/octet-stream" },
-        body: file
-      });
-      const response = await api.patch<{ user: Me }>("/me/profile", { avatarUrl: presign.publicUrl });
       onMeChange(response.user);
       setMessage("프로필 사진을 변경했습니다.");
     } catch (error) {
@@ -1247,9 +1313,13 @@ function LinkButton({ to, icon, label }: { to: string; icon: React.ReactNode; la
 }
 
 function Avatar({ name, src, large = false }: { name: string; src?: string | null; large?: boolean }) {
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  useEffect(() => {
+    setFailedSrc(null);
+  }, [src]);
   const initials = name.trim().slice(0, 2) || "em";
-  return src ? (
-    <img className={`avatar ${large ? "large" : ""}`} src={src} alt="" />
+  return src && failedSrc !== src ? (
+    <img className={`avatar ${large ? "large" : ""}`} src={src} alt="" onError={() => setFailedSrc(src)} />
   ) : (
     <span className={`avatar ${large ? "large" : ""}`}>{initials}</span>
   );

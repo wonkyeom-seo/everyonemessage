@@ -24,5 +24,13 @@ export function sendError(reply: FastifyReply, error: unknown): void {
     return;
   }
 
+  if (typeof error === "object" && error && "statusCode" in error) {
+    const statusCode = Number((error as { statusCode?: unknown }).statusCode);
+    if (Number.isInteger(statusCode) && statusCode >= 400 && statusCode < 500) {
+      reply.status(statusCode).send({ error: error instanceof Error ? error.message : "요청을 처리하지 못했습니다." });
+      return;
+    }
+  }
+
   reply.status(500).send({ error: "서버 오류가 발생했습니다." });
 }

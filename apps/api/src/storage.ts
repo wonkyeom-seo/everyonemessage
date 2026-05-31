@@ -63,7 +63,7 @@ export async function createUploadUrl(
     return {
       key,
       uploadUrl: `/api/uploads/local/${token}`,
-      publicUrl: `${config.LOCAL_FILE_PUBLIC_PATH.replace(/\/$/, "")}/${key}`
+      publicUrl: `${normalizeLocalPublicPath(config.LOCAL_FILE_PUBLIC_PATH)}/${key}`
     };
   }
 
@@ -80,6 +80,28 @@ export async function createUploadUrl(
   };
 }
 
+export async function saveLocalUserFile(
+  config: AppConfig,
+  userId: string,
+  fileName: string,
+  contentType: string,
+  body: Buffer
+): Promise<{ key: string; publicUrl: string }> {
+  const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-120) || "upload";
+  const key = `users/${userId}/${nanoid(12)}-${safeName}`;
+  const target = resolveLocalPath(config, key);
+  await mkdir(path.dirname(target.filePath), { recursive: true });
+  await writeFile(target.filePath, body, { flag: "wx" });
+  await writeFile(
+    target.metadataPath,
+    JSON.stringify({ contentType, size: body.length, uploadedAt: new Date().toISOString() })
+  );
+  return {
+    key,
+    publicUrl: `${normalizeLocalPublicPath(config.LOCAL_FILE_PUBLIC_PATH)}/${key}`
+  };
+}
+
 export async function saveLocalUpload(config: AppConfig, token: string, body: Buffer): Promise<{ key: string }> {
   const payload = verifyUploadToken(config, token);
   const target = resolveLocalPath(config, payload.key);
@@ -90,6 +112,11 @@ export async function saveLocalUpload(config: AppConfig, token: string, body: Bu
     JSON.stringify({ contentType: payload.contentType, size: body.length, uploadedAt: new Date().toISOString() })
   );
   return { key: payload.key };
+}
+
+function normalizeLocalPublicPath(value: string): string {
+  const normalized = value.trim().replace(/^\/+/, "").replace(/\/+$/, "");
+  return `/${normalized || "files"}`;
 }
 
 export async function readLocalFile(config: AppConfig, key: string): Promise<LocalFileResult | null> {
